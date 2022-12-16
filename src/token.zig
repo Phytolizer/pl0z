@@ -28,7 +28,6 @@ pub const TokenKind = enum {
     divide,
     lparen,
     rparen,
-    bang,
 
     unknown,
     eof,
@@ -48,7 +47,6 @@ pub const TokenKind = enum {
             '/' => .divide,
             '(' => .lparen,
             ')' => .rparen,
-            '!' => .bang,
             else => unreachable,
         };
     }
@@ -68,7 +66,6 @@ pub const TokenKind = enum {
             .divide => '/',
             .lparen => '(',
             .rparen => ')',
-            .bang => '!',
             else => unreachable,
         };
     }
