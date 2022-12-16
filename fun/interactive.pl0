@@ -1,7 +1,7 @@
-VAR
-    x;
+VAR x;
 
 BEGIN
+    {"enter a number: "}
     WRITECHAR 101;
     WRITECHAR 110;
     WRITECHAR 116;
@@ -19,7 +19,10 @@ BEGIN
     WRITECHAR 58;
     WRITECHAR 32;
 
+    {read the number}
     READINT x;
+
+    {"you typed: x"}
     WRITECHAR 121;
     WRITECHAR 111;
     WRITECHAR 117;
