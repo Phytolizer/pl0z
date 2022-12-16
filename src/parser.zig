@@ -189,8 +189,7 @@ const ParserState = struct {
     lex: LexerState,
     kind: TokenKind,
     depth: usize,
-    stdout_buf: Buf,
-    stdout: Buf.Writer,
+    stdout: Buf,
     symbols: std.ArrayList(Symbol),
     symbol_arena: std.heap.ArenaAllocator,
     sa: std.mem.Allocator,
@@ -222,8 +221,7 @@ const ParserState = struct {
         var result: ParserState = undefined;
         result.depth = 0;
         result.lex = LexerState.init(a, raw);
-        result.stdout_buf = std.io.bufferedWriter(std.io.getStdOut().writer());
-        result.stdout = result.stdout_buf.writer();
+        result.stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
         result.symbol_arena = std.heap.ArenaAllocator.init(a);
         result.sa = result.symbol_arena.allocator();
         var head = std.ArrayList(Symbol).init(result.sa);
@@ -238,12 +236,12 @@ const ParserState = struct {
 
     pub fn deinit(self: *@This()) void {
         self.lex.freeToken();
-        self.stdout_buf.flush() catch unreachable;
+        self.stdout.flush() catch unreachable;
         self.symbol_arena.deinit();
     }
 
     fn out(self: *@This(), comptime fmt: []const u8, args: anytype) void {
-        self.stdout.print(fmt, args) catch unreachable;
+        self.stdout.writer().print(fmt, args) catch unreachable;
     }
 
     pub fn next(self: *@This()) Error!void {
@@ -447,7 +445,7 @@ const ParserState = struct {
 
     fn genLf(self: *@This()) void {
         self.out("\n", .{});
-        self.stdout_buf.flush() catch unreachable;
+        self.stdout.flush() catch unreachable;
     }
 
     fn genSymbol(self: *@This()) void {
