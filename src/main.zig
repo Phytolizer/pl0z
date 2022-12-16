@@ -39,8 +39,11 @@ pub fn main() !void {
 
     var stderr = std.io.getStdErr().writer();
 
-    if (args.len != 2) {
-        stderr.print("Usage: {s} <file.pl0>\n", .{args[0]}) catch unreachable;
+    if (args.len < 2) {
+        stderr.print(
+            "Usage: {s} <file.pl0> [-o <outfile]\n",
+            .{args[0]},
+        ) catch unreachable;
         std.process.exit(1);
     }
 
@@ -63,15 +66,48 @@ pub fn main() !void {
     };
     defer a.free(raw);
 
-    parser.parse(a, raw, std.io.getStdOut().writer()) catch |e| {
+    const Out = struct {
+        f: std.fs.File,
+        should_close: bool,
+    };
+
+    var out = getOut: {
+        if (args.len > 2 and std.mem.eql(u8, args[2], "-o")) {
+            if (args.len < 4) {
+                stderr.print(
+                    "error: expected output file after -o\n",
+                    .{},
+                ) catch unreachable;
+                std.process.exit(1);
+            }
+            break :getOut Out{
+                .f = try std.fs.cwd().createFile(args[3], .{}),
+                .should_close = true,
+            };
+        } else {
+            break :getOut Out{
+                .f = std.io.getStdOut(),
+                .should_close = false,
+            };
+        }
+    };
+
+    parser.parse(a, raw, out.f.writer()) catch |e| {
         const uncameled = uncamel(@errorName(e), a) catch unreachable;
         stderr.print(
             "error parsing {s} ({s})\n",
             .{ args[1], uncameled },
         ) catch unreachable;
         a.free(uncameled);
+        if (out.should_close) {
+            out.f.close();
+            try std.fs.cwd().deleteFile(args[3]);
+        }
         std.process.exit(1);
     };
+    if (out.should_close) {
+        out.f.close();
+    }
 }
 
 test "parsing" {

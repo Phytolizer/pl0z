@@ -463,7 +463,11 @@ const ParserState = struct {
 
                 switch (self.kind) {
                     .ident, .number => try self.expect(self.kind),
-                    else => return error.InvalidWriteIntCall,
+                    else => return self.errorWith(
+                        "writeint expects an identifier or number",
+                        .{},
+                        error.InvalidWriteIntCall,
+                    ),
                 }
             },
             .write_char => {
