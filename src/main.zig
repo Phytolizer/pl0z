@@ -1,6 +1,7 @@
 const std = @import("std");
 const uncamel = @import("uncamel.zig").uncamel;
 const parser = @import("parser.zig");
+const args = @import("args.zig");
 
 //
 // pl0c -- PL/0 compiler.
@@ -34,20 +35,40 @@ pub fn main() !void {
     defer _ = gpa.detectLeaks();
     const a = gpa.allocator();
 
-    const args = try std.process.argsAlloc(a);
-    defer std.process.argsFree(a, args);
+    const raw_args = try std.process.argsAlloc(a);
+    defer std.process.argsFree(a, raw_args);
+
+    var out_path: ?[]const u8 = null;
+    var in_path: []const u8 = "";
+    const supported_args = [_]args.Arg{
+        args.Arg.pos("input", "input file", &in_path),
+        .{
+            .kind = .{ .opt = &out_path },
+            .short_name = 'o',
+            .long_name = "output",
+            .help = "output file",
+        },
+    };
+
+    var arg_parser = args.Parser.init(
+        a,
+        raw_args[0],
+        "PL/0 compiler",
+        &supported_args,
+    );
+    var out_err: ?[]u8 = null;
+    arg_parser.parse(raw_args[1..], &out_err) catch {
+        try arg_parser.showHelp(std.io.getStdErr().writer());
+        if (out_err) |e| {
+            std.debug.print("error: {s}\n", .{e});
+            a.free(e);
+        }
+        std.process.exit(1);
+    };
 
     var stderr = std.io.getStdErr().writer();
 
-    if (args.len < 2) {
-        stderr.print(
-            "Usage: {s} <file.pl0> [-o <outfile>]\n",
-            .{args[0]},
-        ) catch unreachable;
-        std.process.exit(1);
-    }
-
-    const ext = std.fs.path.extension(args[1]);
+    const ext = std.fs.path.extension(in_path);
     if (!std.mem.eql(u8, ext, ".pl0")) {
         stderr.print(
             "error: file extension must be .pl0, not \"{s}\"\n",
@@ -55,42 +76,32 @@ pub fn main() !void {
         ) catch unreachable;
         std.process.exit(1);
     }
-    const raw = readin(args[1], a) catch |e| {
+    const raw = readin(in_path, a) catch |e| {
         const uncameled = uncamel(@errorName(e), a) catch unreachable;
         stderr.print(
             "error reading {s} ({s})\n",
-            .{ args[1], uncameled },
+            .{ in_path, uncameled },
         ) catch unreachable;
         a.free(uncameled);
         std.process.exit(1);
     };
     defer a.free(raw);
 
-    var out = getOut: {
-        if (args.len > 2 and std.mem.eql(u8, args[2], "-o")) {
-            if (args.len < 4) {
-                stderr.print(
-                    "error: expected output file after -o\n",
-                    .{},
-                ) catch unreachable;
-                std.process.exit(1);
-            }
-            break :getOut try std.fs.cwd().createFile(args[3], .{});
-        } else {
-            break :getOut null;
-        }
-    };
+    var out = if (out_path) |op|
+        try std.fs.cwd().createFile(op, .{})
+    else
+        null;
 
     parser.parse(a, raw, (out orelse std.io.getStdOut()).writer()) catch |e| {
         const uncameled = uncamel(@errorName(e), a) catch unreachable;
         stderr.print(
             "error parsing {s} ({s})\n",
-            .{ args[1], uncameled },
+            .{ in_path, uncameled },
         ) catch unreachable;
         a.free(uncameled);
         if (out) |o| {
             o.close();
-            try std.fs.cwd().deleteFile(args[3]);
+            try std.fs.cwd().deleteFile(out_path.?);
         }
         std.process.exit(1);
     };
@@ -100,6 +111,7 @@ pub fn main() !void {
 }
 
 test "parsing" {
+    std.testing.refAllDeclsRecursive(@import("args.zig"));
     const a = std.testing.allocator;
 
     var dir = try std.fs.cwd().openIterableDir("test", .{});
