@@ -691,12 +691,12 @@ const ParserState = struct {
     }
 
     fn genReadInt(self: *@This()) void {
-        self.out("(void)fgets(pl0__stdin, sizeof(pl0__stdin), stdin);", .{});
+        self.out("(void)fgets(pl0__stdin,sizeof(pl0__stdin),stdin);", .{});
         self.out("if(pl0__stdin[strlen(pl0__stdin)-1]=='\\n')", .{});
         self.out("pl0__stdin[strlen(pl0__stdin)-1]=0;", .{});
         self.out("errno=0;", .{});
         self.out(
-            "{s}=(long)strtol(pl0__stdin,&pl0__errstr,10);",
+            "{s}=strtol(pl0__stdin,&pl0__errstr,10);",
             .{self.lex.token.?},
         );
         self.out("if(errno!=0||pl0__errstr!=NULL&&*pl0__errstr!=0){{", .{});
