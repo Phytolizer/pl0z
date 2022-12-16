@@ -540,8 +540,6 @@ const ParserState = struct {
 
     fn genEpilogue(self: *@This()) void {
         self.out(";", .{});
-        if (!self.proc)
-            self.out("return 0;", .{});
         self.out("\n}}\n\n", .{});
     }
 
