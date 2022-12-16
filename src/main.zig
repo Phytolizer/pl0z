@@ -63,7 +63,7 @@ pub fn main() !void {
     };
     defer a.free(raw);
 
-    parser.parse(a, raw) catch |e| {
+    parser.parse(a, raw, std.io.getStdOut().writer()) catch |e| {
         const uncameled = uncamel(@errorName(e), a) catch unreachable;
         stderr.print(
             "error parsing {s} ({s})\n",

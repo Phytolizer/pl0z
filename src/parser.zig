@@ -242,8 +242,7 @@ const ParserState = struct {
     depth: usize,
     stdout: *Buf,
     symbols: std.ArrayList(Symbol),
-    symbol_arena: std.heap.ArenaAllocator,
-    sa: std.mem.Allocator,
+    sa: std.heap.ArenaAllocator,
     proc: bool = false,
 
     const Buf = std.io.BufferedWriter(4096, std.fs.File.Writer);
@@ -260,20 +259,23 @@ const ParserState = struct {
 
     const CheckKind = enum { lhs, rhs, call };
 
-    pub fn init(a: std.mem.Allocator, raw: []const u8) Error!@This() {
+    pub fn init(
+        a: std.mem.Allocator,
+        raw: []const u8,
+        f: std.fs.File.Writer,
+    ) Error!@This() {
         var result: ParserState = undefined;
         result.depth = 0;
         result.stdout = try a.create(Buf);
         errdefer a.destroy(result.stdout);
-        result.stdout.* = std.io.bufferedWriter(std.io.getStdOut().writer());
+        result.stdout.* = std.io.bufferedWriter(f);
         result.lex = LexerState.init(a, raw, result.stdout);
-        result.symbol_arena = std.heap.ArenaAllocator.init(a);
-        result.sa = result.symbol_arena.allocator();
-        var head = std.ArrayList(Symbol).init(result.sa);
+        result.sa = std.heap.ArenaAllocator.init(a);
+        var head = std.ArrayList(Symbol).init(result.sa.allocator());
         try head.append(Symbol.init(
             0,
             .procedure,
-            try result.sa.dupe(u8, "main"),
+            try result.sa.allocator().dupe(u8, "main"),
         ));
         result.symbols = head;
         result.genInit();
@@ -284,7 +286,7 @@ const ParserState = struct {
         self.lex.freeToken();
         self.stdout.flush() catch unreachable;
         self.lex.a.destroy(self.stdout);
-        self.symbol_arena.deinit();
+        self.sa.deinit();
     }
 
     fn errorWith(
@@ -753,12 +755,16 @@ const ParserState = struct {
         try self.symbols.append(Symbol.init(
             self.depth - 1,
             kind,
-            try self.sa.dupe(u8, self.lex.token.?),
+            try self.sa.allocator().dupe(u8, self.lex.token.?),
         ));
     }
 
-    pub fn parse(a: std.mem.Allocator, raw: []const u8) Error!void {
-        var p = try ParserState.init(a, raw);
+    pub fn parse(
+        a: std.mem.Allocator,
+        raw: []const u8,
+        f: std.fs.File.Writer,
+    ) Error!void {
+        var p = try ParserState.init(a, raw, f);
         defer p.deinit();
 
         try p.next();
