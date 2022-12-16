@@ -41,7 +41,7 @@ pub fn main() !void {
 
     if (args.len < 2) {
         stderr.print(
-            "Usage: {s} <file.pl0> [-o <outfile]\n",
+            "Usage: {s} <file.pl0> [-o <outfile>]\n",
             .{args[0]},
         ) catch unreachable;
         std.process.exit(1);
