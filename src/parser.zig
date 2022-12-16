@@ -2,18 +2,53 @@ const std = @import("std");
 const TokenKind = @import("token.zig").TokenKind;
 const version = @import("version.zig").version;
 
+const Error = error{
+    UnexpectedToken,
+    UnknownToken,
+    InvalidCharacter,
+    UnterminatedComment,
+    NestingDepthExceeded,
+    InvalidConditional,
+    DuplicateSymbol,
+    Overflow,
+    UndefinedSymbol,
+    InvalidCall,
+    InvalidLhs,
+    InvalidRhs,
+    InvalidWriteIntCall,
+    InvalidWriteCharCall,
+} || std.mem.Allocator.Error;
+
 const LexerState = struct {
     a: std.mem.Allocator,
     raw: []const u8,
     offset: usize = 0,
     token: ?[]u8 = null,
     line: usize = 1,
+    stdout: *ParserState.Buf,
 
-    pub fn init(allocator: std.mem.Allocator, raw: []const u8) @This() {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        raw: []const u8,
+        buf: *ParserState.Buf,
+    ) @This() {
         return .{
             .a = allocator,
             .raw = raw,
+            .stdout = buf,
         };
+    }
+
+    fn errorWith(
+        self: *@This(),
+        comptime fmt: []const u8,
+        args: anytype,
+        e: Error,
+    ) Error {
+        self.stdout.flush() catch unreachable;
+        std.debug.print("error: " ++ fmt, args);
+        std.debug.print(" (line {d})\n", .{self.line});
+        return e;
     }
 
     pub fn get(self: *@This()) ?u8 {
@@ -100,6 +135,16 @@ fn ident(s: *LexerState) !TokenKind {
         return .do;
     if (str_eq(tok, "odd"))
         return .odd;
+    if (str_eq(tok, "writeint"))
+        return .write_int;
+    if (str_eq(tok, "writechar"))
+        return .write_char;
+    if (str_eq(tok, "readint"))
+        return .read_int;
+    if (str_eq(tok, "readchar"))
+        return .read_char;
+    if (str_eq(tok, "into"))
+        return .into;
 
     return .ident;
 }
@@ -166,21 +211,27 @@ fn lex(s: *LexerState) !TokenKind {
             ':' => {
                 _ = s.next();
                 const after_colon = s.get();
-                if (after_colon == null) {
-                    std.debug.print("unknown token: ':'", .{});
-                    return error.UnknownToken;
-                }
-                if (after_colon.? != '=') {
-                    std.debug.print("unknown token: ':{c}'", .{after_colon.?});
-                    return error.UnknownToken;
-                }
+                if (after_colon == null)
+                    return s.errorWith(
+                        "unknown token: ':'",
+                        .{},
+                        error.UnknownToken,
+                    );
+
+                if (after_colon.? != '=')
+                    return s.errorWith(
+                        "unknown token: ':{c}'",
+                        .{after_colon.?},
+                        error.UnknownToken,
+                    );
 
                 return .assign;
             },
-            else => {
-                std.debug.print("unknown token: '{c}'", .{c});
-                return error.UnknownToken;
-            },
+            else => return s.errorWith(
+                "unknown token: '{c}'",
+                .{c},
+                error.UnknownToken,
+            ),
         }
     }
 }
@@ -189,7 +240,7 @@ const ParserState = struct {
     lex: LexerState,
     kind: TokenKind,
     depth: usize,
-    stdout: Buf,
+    stdout: *Buf,
     symbols: std.ArrayList(Symbol),
     symbol_arena: std.heap.ArenaAllocator,
     sa: std.mem.Allocator,
@@ -209,26 +260,13 @@ const ParserState = struct {
 
     const CheckKind = enum { lhs, rhs, call };
 
-    const Error = error{
-        UnexpectedToken,
-        UnknownToken,
-        InvalidCharacter,
-        UnterminatedComment,
-        NestingDepthExceeded,
-        InvalidConditional,
-        DuplicateSymbol,
-        Overflow,
-        UndefinedSymbol,
-        InvalidCall,
-        InvalidLhs,
-        InvalidRhs,
-    } || std.mem.Allocator.Error;
-
     pub fn init(a: std.mem.Allocator, raw: []const u8) Error!@This() {
         var result: ParserState = undefined;
         result.depth = 0;
-        result.lex = LexerState.init(a, raw);
-        result.stdout = std.io.bufferedWriter(std.io.getStdOut().writer());
+        result.stdout = try a.create(Buf);
+        errdefer a.destroy(result.stdout);
+        result.stdout.* = std.io.bufferedWriter(std.io.getStdOut().writer());
+        result.lex = LexerState.init(a, raw, result.stdout);
         result.symbol_arena = std.heap.ArenaAllocator.init(a);
         result.sa = result.symbol_arena.allocator();
         var head = std.ArrayList(Symbol).init(result.sa);
@@ -238,13 +276,28 @@ const ParserState = struct {
             try result.sa.dupe(u8, "main"),
         ));
         result.symbols = head;
+        result.genInit();
         return result;
     }
 
     pub fn deinit(self: *@This()) void {
         self.lex.freeToken();
         self.stdout.flush() catch unreachable;
+        self.lex.a.destroy(self.stdout);
         self.symbol_arena.deinit();
+    }
+
+    fn errorWith(
+        self: *@This(),
+        comptime fmt: []const u8,
+        args: anytype,
+        e: Error,
+    ) Error {
+        self.stdout.flush() catch unreachable;
+        std.debug.print("error: ", .{});
+        std.debug.print(fmt, args);
+        std.debug.print(" (line {d})\n", .{self.lex.line});
+        return e;
     }
 
     fn out(self: *@This(), comptime fmt: []const u8, args: anytype) void {
@@ -252,23 +305,17 @@ const ParserState = struct {
     }
 
     pub fn next(self: *@This()) Error!void {
-        self.kind = lex(&self.lex) catch |e| switch (e) {
-            error.UnknownToken => {
-                std.debug.print(" (line {d})\n", .{self.lex.line});
-                return e;
-            },
-            else => return e,
-        };
+        self.kind = try lex(&self.lex);
         _ = self.lex.next();
     }
 
     pub fn expect(self: *@This(), match: TokenKind) Error!void {
         if (self.kind != match) {
-            std.debug.print(
+            return self.errorWith(
                 "expected <{s}>, got <{s}>",
                 .{ match, self.kind },
+                error.UnexpectedToken,
             );
-            return error.UnexpectedToken;
         }
         try self.next();
     }
@@ -404,6 +451,56 @@ const ParserState = struct {
                 try self.expect(.do);
                 try self.statement();
             },
+            .write_int => {
+                try self.expect(.write_int);
+                if (self.kind == .ident or self.kind == .number) {
+                    if (self.kind == .ident)
+                        try self.checkSymbol(.rhs);
+                    self.genWriteInt();
+                }
+
+                switch (self.kind) {
+                    .ident, .number => try self.expect(self.kind),
+                    else => return error.InvalidWriteIntCall,
+                }
+            },
+            .write_char => {
+                try self.expect(.write_char);
+                if (self.kind == .ident or self.kind == .number) {
+                    if (self.kind == .ident)
+                        try self.checkSymbol(.rhs);
+                    self.genWriteChar();
+                }
+
+                switch (self.kind) {
+                    .ident, .number => try self.expect(self.kind),
+                    else => return error.InvalidWriteCharCall,
+                }
+            },
+            .read_int => {
+                try self.expect(.read_int);
+                if (self.kind == .into)
+                    try self.expect(.into);
+
+                if (self.kind == .ident) {
+                    try self.checkSymbol(.lhs);
+                    self.genReadInt();
+                }
+
+                try self.expect(.ident);
+            },
+            .read_char => {
+                try self.expect(.read_char);
+                if (self.kind == .into)
+                    try self.expect(.into);
+
+                if (self.kind == .ident) {
+                    try self.checkSymbol(.lhs);
+                    self.genReadChar();
+                }
+
+                try self.expect(.ident);
+            },
             else => {},
         }
     }
@@ -426,10 +523,11 @@ const ParserState = struct {
                     self.genSymbol();
                     try self.next();
                 },
-                else => {
-                    std.debug.print("expected condition, got <{s}>\n", .{self.kind});
-                    return error.InvalidConditional;
-                },
+                else => return self.errorWith(
+                    "expected condition, got <{s}>\n",
+                    .{self.kind},
+                    error.InvalidConditional,
+                ),
             }
 
             try self.expression();
@@ -483,6 +581,15 @@ const ParserState = struct {
 
     pub fn end(self: *@This()) void {
         self.out("/* PL/0 compiler {s} */\n", .{version});
+    }
+
+    fn genInit(self: *@This()) void {
+        for ([_][]const u8{ "stdio.h", "stdlib.h", "string.h" }) |hdr| {
+            self.out("#include <{s}>\n", .{hdr});
+        }
+        self.out("\n", .{});
+        self.out("static char pl0__stdin[24];\n", .{});
+        self.out("static char* pl0__errstr;\n\n", .{});
     }
 
     fn genConst(self: *@This()) void {
@@ -551,43 +658,81 @@ const ParserState = struct {
         self.out(")&1", .{});
     }
 
+    fn genWriteChar(self: *@This()) void {
+        self.out(
+            "(void)fprintf(stdout, \"%c\", (unsigned char){s});\n",
+            .{self.lex.token.?},
+        );
+    }
+
+    fn genWriteInt(self: *@This()) void {
+        self.out(
+            "(void)fprintf(stdout, \"%ld\", (long){s});\n",
+            .{self.lex.token.?},
+        );
+    }
+
+    fn genReadChar(self: *@This()) void {
+        self.out(
+            "{s}=(unsigned char)fgetc(stdin);",
+            .{self.lex.token.?},
+        );
+    }
+
+    fn genReadInt(self: *@This()) void {
+        self.out("(void)fgets(pl0__stdin, sizeof(pl0__stdin), stdin);", .{});
+        self.out("if(pl0__stdin[strlen(pl0__stdin)-1]=='\\n')", .{});
+        self.out("pl0__stdin[strlen(pl0__stdin)-1]=0;", .{});
+        self.out(
+            "{s}=(long)strtol(pl0__stdin,&pl0__errstr,10);",
+            .{self.lex.token.?},
+        );
+        self.out("if(pl0__errstr!=NULL&&*pl0__errstr!=0){{", .{});
+        self.out(
+            "(void)fprintf(stderr,\"invalid number: %s\\n\",pl0__stdin);",
+            .{},
+        );
+        self.out("exit(1);", .{});
+        self.out("}}", .{});
+    }
+
     fn checkSymbol(self: *@This(), check: CheckKind) Error!void {
         const sym = find: {
             for (self.symbols.items) |sym| {
                 if (str_eq(sym.name, self.lex.token.?))
                     break :find sym;
             }
-            std.debug.print("undefined symbol \"{s}\"\n", .{self.lex.token.?});
-            return error.UndefinedSymbol;
+            return self.errorWith(
+                "undefined symbol \"{s}\"\n",
+                .{self.lex.token.?},
+                error.UndefinedSymbol,
+            );
         };
 
         switch (check) {
             .lhs => {
-                if (sym.kind != .@"var") {
-                    std.debug.print(
+                if (sym.kind != .@"var")
+                    return self.errorWith(
                         "expected variable, got <{s}>\n",
                         .{sym.kind},
+                        error.InvalidLhs,
                     );
-                    return error.InvalidLhs;
-                }
             },
             .rhs => {
-                if (sym.kind == .procedure) {
-                    std.debug.print(
+                if (sym.kind == .procedure)
+                    return self.errorWith(
                         "expected variable or constant, got <{s}>\n",
                         .{sym.kind},
+                        error.InvalidRhs,
                     );
-                    return error.InvalidRhs;
-                }
             },
             .call => {
-                if (sym.kind != .procedure) {
-                    std.debug.print(
+                if (sym.kind != .procedure)
+                    return self.errorWith(
                         "expected procedure, got <{s}>\n",
                         .{sym.kind},
+                        error.InvalidCall,
                     );
-                    return error.InvalidCall;
-                }
             },
         }
     }
@@ -597,8 +742,11 @@ const ParserState = struct {
             if (str_eq(sym.name, self.lex.token.?) and
                 sym.depth == self.depth - 1)
             {
-                std.debug.print("duplicate symbol \"{s}\"\n", .{sym.name});
-                return error.DuplicateSymbol;
+                return self.errorWith(
+                    "duplicate symbol \"{s}\"\n",
+                    .{sym.name},
+                    error.DuplicateSymbol,
+                );
             }
         }
 
@@ -612,10 +760,6 @@ const ParserState = struct {
     pub fn parse(a: std.mem.Allocator, raw: []const u8) Error!void {
         var p = try ParserState.init(a, raw);
         defer p.deinit();
-
-        errdefer |e| if (e == error.UnexpectedToken) {
-            std.debug.print(" (line {d})\n", .{p.lex.line});
-        };
 
         try p.next();
         try p.block();

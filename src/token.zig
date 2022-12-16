@@ -28,6 +28,11 @@ pub const TokenKind = enum {
     divide,
     lparen,
     rparen,
+    write_int,
+    write_char,
+    read_int,
+    read_char,
+    into,
 
     unknown,
     eof,
