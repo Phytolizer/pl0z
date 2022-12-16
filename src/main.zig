@@ -114,7 +114,7 @@ fn run() !void {
         "zig",
         "cc",
         "-std=c89",
-        "-S",
+        "-O2",
         "pl0z-temp/main.c",
         "-o",
         out_path orelse "a.out",
