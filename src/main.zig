@@ -91,27 +91,39 @@ fn run() !void {
     };
     defer a.free(raw);
 
-    var out = if (out_path) |op|
-        try std.fs.cwd().createFile(op, .{})
-    else
-        null;
+    var temp_dir = try std.fs.cwd().makeOpenPath("pl0z-temp", .{});
+    defer {
+        temp_dir.close();
+        std.fs.cwd().deleteTree("pl0z-temp") catch {};
+    }
 
-    parser.parse(a, raw, (out orelse std.io.getStdOut()).writer()) catch |e| {
+    var temp_cfile = try temp_dir.createFile("main.c", .{});
+    defer temp_cfile.close();
+
+    parser.parse(a, raw, temp_cfile.writer()) catch |e| {
         const uncameled = uncamel(@errorName(e), a) catch unreachable;
         stderr.print(
             "error parsing {s} ({s})\n",
             .{ in_path, uncameled },
         ) catch unreachable;
         a.free(uncameled);
-        if (out) |o| {
-            o.close();
-            try std.fs.cwd().deleteFile(out_path.?);
-        }
         return error.Parse;
     };
-    if (out) |o| {
-        o.close();
-    }
+
+    var child = std.ChildProcess.init(&[_][]const u8{
+        "zig",
+        "cc",
+        "-std=c89",
+        "-S",
+        "pl0z-temp/main.c",
+        "-o",
+        out_path orelse "a.out",
+    }, a);
+    const failed = switch (try child.spawnAndWait()) {
+        .Exited => |code| code != 0,
+        else => true,
+    };
+    if (failed) return error.ZigSpawn;
 }
 
 test "parsing" {
