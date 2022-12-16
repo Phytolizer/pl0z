@@ -31,6 +31,10 @@ fn readin(path: []const u8, a: std.mem.Allocator) ![]u8 {
 }
 
 pub fn main() !void {
+    run() catch std.process.exit(1);
+}
+
+fn run() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.detectLeaks();
     const a = gpa.allocator();
@@ -57,13 +61,13 @@ pub fn main() !void {
         &supported_args,
     );
     var out_err: ?[]u8 = null;
-    arg_parser.parse(raw_args[1..], &out_err) catch {
+    arg_parser.parse(raw_args[1..], &out_err) catch |err| {
         try arg_parser.showHelp(std.io.getStdErr().writer());
         if (out_err) |e| {
             std.debug.print("error: {s}\n", .{e});
             a.free(e);
         }
-        std.process.exit(1);
+        return err;
     };
 
     var stderr = std.io.getStdErr().writer();
@@ -74,7 +78,7 @@ pub fn main() !void {
             "error: file extension must be .pl0, not \"{s}\"\n",
             .{ext},
         ) catch unreachable;
-        std.process.exit(1);
+        return error.Usage;
     }
     const raw = readin(in_path, a) catch |e| {
         const uncameled = uncamel(@errorName(e), a) catch unreachable;
@@ -83,7 +87,7 @@ pub fn main() !void {
             .{ in_path, uncameled },
         ) catch unreachable;
         a.free(uncameled);
-        std.process.exit(1);
+        return e;
     };
     defer a.free(raw);
 
@@ -103,7 +107,7 @@ pub fn main() !void {
             o.close();
             try std.fs.cwd().deleteFile(out_path.?);
         }
-        std.process.exit(1);
+        return error.Parse;
     };
     if (out) |o| {
         o.close();
