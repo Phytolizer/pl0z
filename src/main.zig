@@ -66,11 +66,6 @@ pub fn main() !void {
     };
     defer a.free(raw);
 
-    const Out = struct {
-        f: std.fs.File,
-        should_close: bool,
-    };
-
     var out = getOut: {
         if (args.len > 2 and std.mem.eql(u8, args[2], "-o")) {
             if (args.len < 4) {
@@ -80,33 +75,27 @@ pub fn main() !void {
                 ) catch unreachable;
                 std.process.exit(1);
             }
-            break :getOut Out{
-                .f = try std.fs.cwd().createFile(args[3], .{}),
-                .should_close = true,
-            };
+            break :getOut try std.fs.cwd().createFile(args[3], .{});
         } else {
-            break :getOut Out{
-                .f = std.io.getStdOut(),
-                .should_close = false,
-            };
+            break :getOut null;
         }
     };
 
-    parser.parse(a, raw, out.f.writer()) catch |e| {
+    parser.parse(a, raw, (out orelse std.io.getStdOut()).writer()) catch |e| {
         const uncameled = uncamel(@errorName(e), a) catch unreachable;
         stderr.print(
             "error parsing {s} ({s})\n",
             .{ args[1], uncameled },
         ) catch unreachable;
         a.free(uncameled);
-        if (out.should_close) {
-            out.f.close();
+        if (out) |o| {
+            o.close();
             try std.fs.cwd().deleteFile(args[3]);
         }
         std.process.exit(1);
     };
-    if (out.should_close) {
-        out.f.close();
+    if (out) |o| {
+        o.close();
     }
 }
 
