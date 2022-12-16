@@ -141,6 +141,6 @@ test "parsing" {
         const raw = try readin(fullDir, a);
         defer a.free(raw);
 
-        try parser.parse(a, raw);
+        try parser.parse(a, raw, std.io.getStdOut().writer());
     }
 }
