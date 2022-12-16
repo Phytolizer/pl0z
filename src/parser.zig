@@ -193,6 +193,7 @@ const ParserState = struct {
     symbols: std.ArrayList(Symbol),
     symbol_arena: std.heap.ArenaAllocator,
     sa: std.mem.Allocator,
+    proc: bool = false,
 
     const Buf = std.io.BufferedWriter(4096, std.fs.File.Writer);
 
@@ -206,6 +207,8 @@ const ParserState = struct {
         }
     };
 
+    const CheckKind = enum { lhs, rhs, call };
+
     const Error = error{
         UnexpectedToken,
         UnknownToken,
@@ -215,6 +218,10 @@ const ParserState = struct {
         InvalidConditional,
         DuplicateSymbol,
         Overflow,
+        UndefinedSymbol,
+        InvalidCall,
+        InvalidLhs,
+        InvalidRhs,
     } || std.mem.Allocator.Error;
 
     pub fn init(a: std.mem.Allocator, raw: []const u8) Error!@This() {
@@ -320,16 +327,29 @@ const ParserState = struct {
             self.genLf();
         }
         while (self.kind == .procedure) {
+            self.proc = true;
+
             try self.expect(.procedure);
+            if (self.kind == .ident) {
+                try self.addSymbol(.procedure);
+                self.genPrologue();
+            }
             try self.expect(.ident);
             try self.expect(.semicolon);
 
             try self.block();
 
             try self.expect(.semicolon);
+
+            self.proc = false;
         }
 
+        if (!self.proc)
+            self.genPrologue();
+
         try self.statement();
+
+        self.genEpilogue();
 
         self.depth -= 1;
     }
@@ -337,32 +357,50 @@ const ParserState = struct {
     fn statement(self: *@This()) Error!void {
         switch (self.kind) {
             .ident => {
+                try self.checkSymbol(.lhs);
+                self.genSymbol();
                 try self.expect(.ident);
+                if (self.kind == .assign)
+                    self.genSymbol();
                 try self.expect(.assign);
                 try self.expression();
             },
             .call => {
                 try self.expect(.call);
+                if (self.kind == .ident) {
+                    try self.checkSymbol(.call);
+                    self.genCall();
+                }
                 try self.expect(.ident);
             },
             .begin => {
+                self.genSymbol();
                 try self.expect(.begin);
                 try self.statement();
                 while (self.kind == .semicolon) {
+                    self.genSemicolon();
                     try self.expect(.semicolon);
                     try self.statement();
                 }
+                if (self.kind == .end)
+                    self.genSymbol();
                 try self.expect(.end);
             },
             .@"if" => {
+                self.genSymbol();
                 try self.expect(.@"if");
                 try self.condition();
+                if (self.kind == .then)
+                    self.genSymbol();
                 try self.expect(.then);
                 try self.statement();
             },
             .@"while" => {
+                self.genSymbol();
                 try self.expect(.@"while");
                 try self.condition();
+                if (self.kind == .do)
+                    self.genSymbol();
                 try self.expect(.do);
                 try self.statement();
             },
@@ -372,8 +410,10 @@ const ParserState = struct {
 
     fn condition(self: *@This()) Error!void {
         if (self.kind == .odd) {
+            self.genSymbol();
             try self.expect(.odd);
             try self.expression();
+            self.genOdd();
         } else {
             try self.expression();
 
@@ -382,7 +422,10 @@ const ParserState = struct {
                 .hash,
                 .less_than,
                 .greater_than,
-                => try self.next(),
+                => {
+                    self.genSymbol();
+                    try self.next();
+                },
                 else => {
                     std.debug.print("expected condition, got <{s}>\n", .{self.kind});
                     return error.InvalidConditional;
@@ -395,10 +438,21 @@ const ParserState = struct {
 
     fn factor(self: *@This()) Error!void {
         switch (self.kind) {
-            .ident, .number => try self.next(),
+            .ident => {
+                try self.checkSymbol(.rhs);
+                self.genSymbol();
+                try self.next();
+            },
+            .number => {
+                self.genSymbol();
+                try self.next();
+            },
             .lparen => {
+                self.genSymbol();
                 try self.expect(.lparen);
                 try self.expression();
+                if (self.kind == .rparen)
+                    self.genSymbol();
                 try self.expect(.rparen);
             },
             else => {},
@@ -408,6 +462,7 @@ const ParserState = struct {
     fn term(self: *@This()) Error!void {
         try self.factor();
         while (self.kind == .multiply or self.kind == .divide) {
+            self.genSymbol();
             try self.next();
             try self.factor();
         }
@@ -415,18 +470,19 @@ const ParserState = struct {
 
     fn expression(self: *@This()) Error!void {
         if (self.kind == .plus or self.kind == .minus) {
+            self.genSymbol();
             try self.next();
         }
         try self.term();
         while (self.kind == .plus or self.kind == .minus) {
+            self.genSymbol();
             try self.next();
             try self.term();
         }
     }
 
     pub fn end(self: *@This()) void {
-        self.out("/* PL/0 compiler {s} */", .{version});
-        self.genLf();
+        self.out("/* PL/0 compiler {s} */\n", .{version});
     }
 
     fn genConst(self: *@This()) void {
@@ -434,18 +490,15 @@ const ParserState = struct {
     }
 
     fn genVar(self: *@This()) void {
-        self.out("long {s};", .{self.lex.token.?});
-        self.genLf();
+        self.out("long {s};\n", .{self.lex.token.?});
     }
 
     fn genSemicolon(self: *@This()) void {
-        self.out(";", .{});
-        self.genLf();
+        self.out(";\n", .{});
     }
 
     fn genLf(self: *@This()) void {
         self.out("\n", .{});
-        self.stdout.flush() catch unreachable;
     }
 
     fn genSymbol(self: *@This()) void {
@@ -472,6 +525,72 @@ const ParserState = struct {
             .lparen => self.out("(", .{}),
             .rparen => self.out(")", .{}),
             else => unreachable,
+        }
+    }
+
+    fn genPrologue(self: *@This()) void {
+        if (self.proc) {
+            self.out("void {s}(void)\n", .{self.lex.token.?});
+        } else {
+            self.out("int main(int argc, char** argv)\n", .{});
+        }
+
+        self.out("{{\n", .{});
+    }
+
+    fn genEpilogue(self: *@This()) void {
+        self.out(";", .{});
+        if (!self.proc)
+            self.out("return 0;", .{});
+        self.out("\n}}\n\n", .{});
+    }
+
+    fn genCall(self: *@This()) void {
+        self.out("{s}();\n", .{self.lex.token.?});
+    }
+
+    fn genOdd(self: *@This()) void {
+        self.out(")&1", .{});
+    }
+
+    fn checkSymbol(self: *@This(), check: CheckKind) Error!void {
+        const sym = find: {
+            for (self.symbols.items) |sym| {
+                if (str_eq(sym.name, self.lex.token.?))
+                    break :find sym;
+            }
+            std.debug.print("undefined symbol \"{s}\"\n", .{self.lex.token.?});
+            return error.UndefinedSymbol;
+        };
+
+        switch (check) {
+            .lhs => {
+                if (sym.kind != .@"var") {
+                    std.debug.print(
+                        "expected variable, got <{s}>\n",
+                        .{sym.kind},
+                    );
+                    return error.InvalidLhs;
+                }
+            },
+            .rhs => {
+                if (sym.kind == .procedure) {
+                    std.debug.print(
+                        "expected variable or constant, got <{s}>\n",
+                        .{sym.kind},
+                    );
+                    return error.InvalidRhs;
+                }
+            },
+            .call => {
+                if (sym.kind != .procedure) {
+                    std.debug.print(
+                        "expected procedure, got <{s}>\n",
+                        .{sym.kind},
+                    );
+                    return error.InvalidCall;
+                }
+            },
         }
     }
 
