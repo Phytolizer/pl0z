@@ -590,7 +590,12 @@ const ParserState = struct {
     }
 
     fn genInit(self: *@This()) void {
-        for ([_][]const u8{ "stdio.h", "stdlib.h", "string.h" }) |hdr| {
+        for ([_][]const u8{
+            "stdio.h",
+            "stdlib.h",
+            "string.h",
+            "errno.h",
+        }) |hdr| {
             self.out("#include <{s}>\n", .{hdr});
         }
         self.out("\n", .{});
@@ -689,11 +694,12 @@ const ParserState = struct {
         self.out("(void)fgets(pl0__stdin, sizeof(pl0__stdin), stdin);", .{});
         self.out("if(pl0__stdin[strlen(pl0__stdin)-1]=='\\n')", .{});
         self.out("pl0__stdin[strlen(pl0__stdin)-1]=0;", .{});
+        self.out("errno=0;", .{});
         self.out(
             "{s}=(long)strtol(pl0__stdin,&pl0__errstr,10);",
             .{self.lex.token.?},
         );
-        self.out("if(pl0__errstr!=NULL&&*pl0__errstr!=0){{", .{});
+        self.out("if(errno!=0||pl0__errstr!=NULL&&*pl0__errstr!=0){{", .{});
         self.out(
             "(void)fprintf(stderr,\"invalid number: %s\\n\",pl0__stdin);",
             .{},
