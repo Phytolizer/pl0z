@@ -8,5 +8,5 @@ Currently it is pretty much just a fancy parser.
 
 - [X] Lexer
 - [X] Parser
-- [ ] Code Generator
+- [X] Code Generator
 - [ ] Invoke Zig to target machine code
